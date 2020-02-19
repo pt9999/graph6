@@ -1,32 +1,50 @@
 #include <iostream>
 #include <cassert>
 #include <cstdlib>
+#include <cstring>
 using namespace std;
 
 #define popcount __builtin_popcount 
 
 typedef __uint8_t uint8;
 typedef __uint32_t uint32;
+
+//  node count
+const uint32 N = 6;
+//  edge count
+const uint32 E = N * (N - 1) / 2;
+
 typedef uint32 node;       // 0..5
 typedef uint32 edge;       // 0..14
-typedef uint32 edge_mask;  // 15bit
+typedef uint32 edge_set;   // 15bit
 typedef uint32 board;      // 30bit
-const int BOARD_COUNT = (1 << 30);
-const int EDGE_MASK = (1 << 15) - 1;
+const uint32 BOARD_COUNT = (1 << (E * 2));
+const uint32 EDGE_MASK = (1 << E) - 1;
 uint8 red_wins_table[BOARD_COUNT >> 3];
 uint8 blue_wins_table[BOARD_COUNT >> 3];
 
-edge node2edge[6][6];
-node edge2node_i[15];
-node edge2node_j[15];
+edge node2edge[N][N];
+node edge2node_i[E];
+node edge2node_j[E];
 static void init_table ()
 {
-    edge node_i2edge[6] = { 0, 5, 9, 12, 14, 15 };
+    //cout << std::hex << BOARD_COUNT << std::dec << endl;
+    //cout << std::hex << EDGE_MASK << std::dec << endl;
 
-    for (int i = 0; i < 6; i++) {
-        for (int j = i + 1; j < 6; j++) {
+    memset(red_wins_table, 0, sizeof(red_wins_table));
+    memset(blue_wins_table, 0, sizeof(blue_wins_table));
+
+    //edge node_i2edge[N] = { 0, 5, 9, 12, 14, 15 };
+    edge node_i2edge[N];
+    node_i2edge[0] = 0;
+    for (uint32 i = 1; i < N; i++) {
+        node_i2edge[i] = node_i2edge[i-1] + (N - i);
+    }
+
+    for (uint32 i = 0; i < N; i++) {
+        for (uint32 j = i + 1; j < N; j++) {
             edge e = node_i2edge[i] + (j - i - 1);
-            assert (e < 15);
+            assert (e < E);
             node2edge[i][j] = e;
             node2edge[j][i] = e;
             edge2node_i[e] = i;
@@ -39,12 +57,12 @@ static void init_table ()
 
 static inline bool red_wins(board b)
 {
-    return (red_wins_table[b >> 3] & (1 << (b&7))) != 0;
+    return (red_wins_table[b >> 3] & (1 << (b & 7))) != 0;
 }
 
 static inline bool blue_wins(board b)
 {
-    return (blue_wins_table[b >> 3] & (1 << (b&7))) != 0;
+    return (blue_wins_table[b >> 3] & (1 << (b & 7))) != 0;
 }
 
 static inline bool wins(board b, bool red)
@@ -56,40 +74,53 @@ static inline bool wins(board b, bool red)
 static inline void set_wins(board b, bool red)
 {
     if (red) {
-        red_wins_table[b >> 3] |= (1 << (b&7));
+        red_wins_table[b >> 3] |= (1 << (b & 7));
     } else {
-        blue_wins_table[b >> 3] |= (1 << (b&7));
+        blue_wins_table[b >> 3] |= (1 << (b & 7));
     }
 }
 
-static inline edge_mask board2edge_mask(board b, bool red)
+/*
+static void wins_test()
 {
-    edge_mask emask;
-    if (red) { emask = b & EDGE_MASK; }
-    else { emask = (b >> 15) & EDGE_MASK; }
-    return emask;
+    assert (! wins (12345, true));
+    assert (! wins (6789, false));
+    set_wins(12345, true);
+    set_wins(6789, false);
+
+    assert (wins (12345, true));
+    assert (wins (6789, false));
+    exit (0);
+}
+*/
+
+static inline edge_set get_board_edges(board b, bool red)
+{
+    edge_set edges;
+    if (red) { edges = b & EDGE_MASK; }
+    else { edges = (b >> E) & EDGE_MASK; }
+    return edges;
 }
 
-static inline bool contains_edge(board b, edge e)
+static inline bool board_has_edge(board b, edge e)
 {
-    if ((b & (1 << e)) != 0 || 
-        (b & (1 << (e + 15))) != 0) {
-        return true;
-    }
-    return false;
+    edge_set edges = (b | (b >> E)) & EDGE_MASK;
+    return (edges & (1 << e)) != 0;
 }
 
-static inline bool will_make_triangle(edge_mask emask, edge e)
+static inline bool will_make_triangle(edge_set edges, edge e)
 {
     node i = edge2node_i[e];
     node j = edge2node_j[e];
 
-    for (node k = 0; k < 6; k++) {
+    assert ((edges & (1 << e)) == 0);
+
+    for (node k = 0; k < N; k++) {
         if (k != i && k != j) {
             edge e1 = node2edge[i][k];
             edge e2 = node2edge[k][j];
-            if ((emask & (1 << e1)) != 0 &&
-                (emask & (1 << e2)) != 0) {
+            if ((edges & (1 << e1)) != 0 &&
+                (edges & (1 << e2)) != 0) {
                     return true;
             }
         }
@@ -97,15 +128,15 @@ static inline bool will_make_triangle(edge_mask emask, edge e)
     return false;
 }
 
-static inline board place_edge(board b, edge e, bool red)
+static inline board board_add_edge(board b, edge e, bool red)
 {
     if (red) return b | (1 << e);
-    else     return b | (1 << (e + 15));
+    else     return b | (1 << (e + E));
 }
 
-int search_count = 0, progress_count = 0;
+uint32 search_count = 0, progress_count = 0;
 
-static bool will_wins(board b, bool red, uint32 turn)
+static bool will_win(board b, bool red, uint32 turn)
 {
     if (wins(b, red)) { return true; }
     if (wins(b, !red)) { return false; }
@@ -117,18 +148,18 @@ static bool will_wins(board b, bool red, uint32 turn)
         red << ',' << std::hex << b << std::dec << endl;
     }
 
-    edge_mask emask = board2edge_mask(b, red);
+    edge_set my_edges = get_board_edges(b, red);
     uint32 win_count = 0;
-    for (edge e = 0; e < 15; e++)
+    for (edge e = 0; e < E; e++)
     {
-        if (contains_edge (b, e)) {
+        if (board_has_edge (b, e)) {
             continue;
         }
-        if (will_make_triangle(emask, e)) {
+        if (will_make_triangle(my_edges, e)) {
             continue;
         }
-        board b1 = place_edge(b, e, red);
-        bool w1 = will_wins(b1, !red, turn + 1);
+        board b1 = board_add_edge(b, e, red);
+        bool w1 = will_win(b1, !red, turn + 1);
         if (!w1) {
             win_count++;
         }
@@ -144,33 +175,41 @@ static bool will_wins(board b, bool red, uint32 turn)
 
 edge select_edge_com(board b, bool red, uint32 turn)
 {
-    edge_mask emask_wins = 0;
-    edge_mask emask_lose = 0;
-    for (edge e = 0; e < 15; e++)
+    edge_set my_edges = get_board_edges(b, red);
+    edge_set win_edges = 0;
+    edge_set lose_edges = 0;
+    for (edge e = 0; e < E; e++)
     {
-        if (contains_edge (b, e)) {
+        if (board_has_edge (b, e)) {
             continue;
         }
-        board b1 = place_edge(b, e, red);
-        if (will_wins(b1, !red, turn)) {
-            emask_lose |= (1 << e);
+        if (will_make_triangle(my_edges, e)) {
+            lose_edges |= (1 << e);
+            continue;
+        }
+        board b1 = board_add_edge(b, e, red);
+        if (will_win(b1, !red, turn)) {
+            lose_edges |= (1 << e);
             continue;
         } else {
-            emask_wins |= (1 << e);
+            win_edges |= (1 << e);
             continue;
         } 
     }
 
-    uint32 count_wins = popcount(emask_wins);
-    uint32 count_lose = popcount(emask_lose);
-    uint32 count_select = (count_wins > 0) ? count_wins : count_lose;
-    edge_mask emask_select = (count_wins > 0) ? emask_wins : emask_lose;
+    uint32 win_count = popcount(win_edges);
+    uint32 lose_count = popcount(lose_edges);
+    cout << "W:" << win_count << ':' << std::hex << win_edges << std::dec << endl;
+    cout << "L:" << lose_count << ':' << std::hex << lose_edges << std::dec << endl;
 
-    uint32 select = rand() % count_select;
-    for (edge e = 0; e < 15; e++)
+    uint32 selectable_count = (win_count > 0) ? win_count : lose_count;
+    edge_set selectable_edges = (win_count > 0) ? win_edges : lose_edges;
+
+    uint32 selection = rand() % selectable_count;
+    for (edge e = 0; e < E; e++)
     {
-        if (emask_select & (1 << e)) {
-            if (select-- == 0) {
+        if (selectable_edges & (1 << e)) {
+            if (selection-- == 0) {
                 return e;
             }
         }
@@ -179,33 +218,44 @@ edge select_edge_com(board b, bool red, uint32 turn)
     return 0;
 }
 
-void com_vs_com()
+bool com_vs_com()
 {
     board b = 0;
     bool red = true;
-    for (uint32 turn = 0; turn < 15; turn++, red = !red) {
+    for (uint32 turn = 0; turn < E; turn++, red = !red) {
         edge e = select_edge_com (b, red, turn);
-        cout << turn << ':' << (red? "RED," : "BLUE,") << e << endl;
-        edge_mask emask = board2edge_mask(b, red);
-        if (will_make_triangle (emask, e)) {
-            cout << (red? "RED LOSE" : "BLUE LOSE") << endl;
-            return;
+        cout << turn << ':' << (red? "RED " : "BLUE")
+         << "," << edge2node_i[e]
+         << "," << edge2node_j[e]
+         << " (" << e << ")"
+         << endl;
+        edge_set edges = get_board_edges(b, red);
+        if (will_make_triangle (edges, e)) {
+            cout << (red? "RED" : "BLUE") << " LOSE" << endl;
+            return !red;    // winner
         }
-        b = place_edge(b, e, red);
+        b = board_add_edge(b, e, red);
     }
-    cout << "DRAW" << endl;
+    cout << (red? "RED" : "BLUE") << " LOSE" << endl;
+    return !red;
 }
 
 int main (int argc, char** argv)
 {
     init_table();
-    bool w = will_wins (0, true, 0);
-    cout << w << ',' << search_count << endl;
+    //wins_test();
+    bool red = true;
+    bool red_will_win = will_win (0, red, 0);
+    cout << red_will_win << ',' << std::dec << search_count << endl;
+    cout << (!red_will_win ? "RED" : "BLUE") << " WILL LOSE"  << endl;
+
 
     srand(123);
     for (uint32 iter = 0; iter < 100; iter++) {
         cout << endl;
-        com_vs_com();
+        bool winner = com_vs_com();
+        if (red_will_win) assert (winner == true);
+        else assert (winner == false);
     }
 
     return 0;
