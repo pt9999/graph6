@@ -1,4 +1,5 @@
 #include <iostream>
+#include <fstream>
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
@@ -78,6 +79,13 @@ static inline void set_wins(board b, bool red)
     } else {
         blue_wins_table[b >> 3] |= (1 << (b & 7));
     }
+}
+
+static void save_wins_table()
+{
+    ofstream ofs ("table.dat", ios::binary);
+    ofs.write((char*) red_wins_table, sizeof(red_wins_table));
+    ofs.write((char*) blue_wins_table, sizeof(blue_wins_table));
 }
 
 /*
@@ -248,7 +256,7 @@ int main (int argc, char** argv)
     bool red_will_win = will_win (0, red, 0);
     cout << red_will_win << ',' << std::dec << search_count << endl;
     cout << (!red_will_win ? "RED" : "BLUE") << " WILL LOSE"  << endl;
-
+    //save_wins_table();
 
     srand(123);
     for (uint32 iter = 0; iter < 100; iter++) {
