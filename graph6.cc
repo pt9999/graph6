@@ -207,8 +207,8 @@ edge select_edge_com(board b, bool red, uint32 turn)
 
     uint32 win_count = popcount(win_edges);
     uint32 lose_count = popcount(lose_edges);
-    cout << "W:" << win_count << ':' << std::hex << win_edges << std::dec << endl;
-    cout << "L:" << lose_count << ':' << std::hex << lose_edges << std::dec << endl;
+    //cout << "W:" << win_count << ':' << std::hex << win_edges << std::dec << endl;
+    //cout << "L:" << lose_count << ':' << std::hex << lose_edges << std::dec << endl;
 
     uint32 selectable_count = (win_count > 0) ? win_count : lose_count;
     edge_set selectable_edges = (win_count > 0) ? win_edges : lose_edges;
@@ -235,7 +235,7 @@ bool com_vs_com()
         cout << turn << ':' << (red? "RED " : "BLUE")
          << "," << edge2node_i[e]
          << "," << edge2node_j[e]
-         << " (" << e << ")"
+         //<< " (" << e << ")"
          << endl;
         edge_set edges = get_board_edges(b, red);
         if (will_make_triangle (edges, e)) {
@@ -258,7 +258,7 @@ int main (int argc, char** argv)
     cout << (!red_will_win ? "RED" : "BLUE") << " WILL LOSE"  << endl;
     //save_wins_table();
 
-    srand(123);
+    srand(1234);
     for (uint32 iter = 0; iter < 100; iter++) {
         cout << endl;
         bool winner = com_vs_com();

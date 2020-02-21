@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<title>グラフ</title>
+<style type="text/css">
+#canvas {
+    border: 1px solid black;
+}
+#output {
+    width: 600px;
+    height: 400px;
+    margin: 5px;
+    padding: 5px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    overflow:scroll;
+}
+#form {
+    border: 1px solid black;
+}
+</style>
+<script>
+
+const N = 6;    //  node count
+const E = 15;   //  edge count
+const EDGE_MASK = (1 << E) - 1;
+let node2edge = new Uint8Array(N * N);
+let edge2node_i = new Uint8Array(E);
+let edge2node_j = new Uint8Array(E);
+
+function init_node_table()
+{
+    let step = [];
+    step[0] = 0;
+    for (let i = 1; i < N; i++) {
+        step[i] = step[i - 1] + (N - i);
+    }
+    for (let i = 0; i < N; i++) {
+        for (let j = i + 1; j < N; j++) {
+            const edge = step[i] + (j - i - 1);    // edge
+            node2edge[i*N+j] = edge;
+            node2edge[j*N+i] = edge;
+            edge2node_i[edge] = i;
+            edge2node_j[edge] = j;
+            //output (`${i},${j},${edge}<br>`);
+        }
+    }
+}
+
+let compress_table = new Uint16Array(65536);
+
+//  compress red_edges(2^8), blue_edges(2^8) into 3^8 (13bit)
+function init_compress_table()
+{
+    for (let red_edges = 0; red_edges < 256; red_edges++) {
+        for (let blue_edges = 0; blue_edges < 256; blue_edges++) {
+            if ((red_edges & blue_edges) != 0) { continue; }
+            let compress = 0;
+            for (let i = 0; i < 8; i++) {
+                let rbit = (red_edges >>> (7 - i)) & 1;
+                let bbit = (blue_edges >>> (7 - i)) & 1;
+                compress = (compress << 1) + compress + (rbit << 1) + bbit;
+            }
+            let uncompress = (red_edges << 8) | blue_edges;
+            compress_table[uncompress] = compress;
+        }
+    }
+    console.log(compress_table);
+}
+
+//  compress red_edges(2^15), blue_edges(2^15) into 3^16 (13bit * 2)
+function compress(board)
+{
+    let red_edges = (board >>> 15) & EDGE_MASK;
+    let red_edges_hi = (red_edges >>> 8) & 0xff;
+    let red_edges_lo =  red_edges       & 0xff;
+    let blue_edges = board & EDGE_MASK;
+    let blue_edges_hi = (blue_edges >>> 8) & 0xff;
+    let blue_edges_lo =  blue_edges       & 0xff;
+    let chi = compress_table[(red_edges_hi << 8) | blue_edges_hi];
+    let clo = compress_table[(red_edges_lo << 8) | blue_edges_lo];
+    return (chi << 13) | clo;
+}
+
+
+const COMPRESS_BOARD_COUNT = 1 << 26;
+const red_wins_table = new Uint8Array(COMPRESS_BOARD_COUNT >>> 3);
+const blue_wins_table = new Uint8Array(COMPRESS_BOARD_COUNT >>> 3);
+
+//  board=30bit player=1(red) 0(blue) 
+function get_win_bit(board, player)
+{
+    let c = compress(board);
+    if (player) return (red_wins_table[c >>> 3] & (1 << (c & 7))) != 0;
+    else       return (blue_wins_table[c >>> 3] & (1 << (c & 7))) != 0;
+}
+
+function set_win_bit(board, player)
+{
+    let c = compress(board);
+    if (player) { red_wins_table[c >>> 3] |= (1 << (c & 7)) }
+    else       { blue_wins_table[c >>> 3] |= (1 << (c & 7)) }
+}
+
+//  board=30bit player=1(red) 0(blue) 
+function get_board_edges(board, player)
+{
+    if (player) { return (board >>> E) & EDGE_MASK; }
+    else        { return board & EDGE_MASK; }
+}
+
+function add_edge_to_board(board, edge, player)
+{
+    if (player)  return board | (1 << (edge + E));
+    else         return board | (1 << edge);
+}
+
+function board_has_edge(board, edge)
+{
+    let edgeset = (board | (board >>> E)) & EDGE_MASK;
+    return (edgeset & (1 << edge)) != 0;
+}
+
+function will_make_triangle(edgeset, edge)
+{
+    let i = edge2node_i[edge];
+    let j = edge2node_j[edge];
+
+    assert ((edgeset & (1 << edge)) == 0);
+
+    for (let k = 0; k < N; k++) {
+        if (k != i && k != j) {
+            let e1 = node2edge[i*N+k];
+            let e2 = node2edge[k*N+j];
+            if ((edgeset & (1 << e1)) != 0 &&
+                (edgeset & (1 << e2)) != 0) {
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
+
+let search_count = 0, progress_count = 0;
+
+function search_win(board, player, turn)
+{
+    if (get_win_bit(board, player)) { return true; }
+    if (get_win_bit(board, !player)) { return false; }
+    ++search_count;
+    ++progress_count;
+    if (progress_count >= 999) {
+        progress_count = 0;
+        console.log(`${progress_count},${turn},${player},${board.toString(16)}`)
+    }
+
+    let my_edges = get_board_edges(board, player);
+    let win_count = 0;
+    for (let edge = 0; edge < E; edge++)
+    {
+        if (board_has_edge (board, edge)) {
+            continue;
+        }
+        if (will_make_triangle(my_edges, edge)) {
+            continue;
+        }
+        let board_1 = add_edge_to_board(board, edge, player);
+        let opponent_wins = search_win(board_1, !player, turn + 1);
+        if (!opponent_wins) {
+            win_count++;
+        }
+    }
+    if (win_count > 0) {
+        set_win_bit(board, player);
+        return true;
+    } else {
+        set_win_bit(board, !player);
+        return false;
+    }
+}
+
+
+function popcount(x)
+{
+    x = (x & 0x55555555) + ((x >>>  1) & 0x55555555);
+    x = (x & 0x33333333) + ((x >>>  2) & 0x33333333);
+    x = (x & 0x0f0f0f0f) + ((x >>>  4) & 0x0f0f0f0f);
+    x = (x & 0x00ff00ff) + ((x >>>  8) & 0x00ff00ff);
+    x = (x & 0x0000ffff) + ((x >>> 16) & 0x0000ffff);
+    return x;
+}
+
+function select_edge_com(b, red, turn)
+{
+    let my_edges = get_board_edges(b, red);
+    let win_edges = 0;
+    let lose_edges = 0;
+    for (let e = 0; e < E; e++)
+    {
+        if (board_has_edge (b, e)) {
+            continue;
+        }
+        if (will_make_triangle(my_edges, e)) {
+            lose_edges |= (1 << e);
+            continue;
+        }
+        let b1 = add_edge_to_board(b, e, red);
+        if (search_win(b1, !red, turn)) {
+            lose_edges |= (1 << e);
+            continue;
+        } else {
+            win_edges |= (1 << e);
+            continue;
+        } 
+    }
+
+    let win_count = popcount(win_edges);
+    let lose_count = popcount(lose_edges);
+
+    let selectable_count = (win_count > 0) ? win_count : lose_count;
+    let selectable_edges = (win_count > 0) ? win_edges : lose_edges;
+
+    let selection = Math.floor(Math.random() * selectable_count);
+    for (let e = 0; e < E; e++)
+    {
+        if (selectable_edges & (1 << e)) {
+            if (selection-- == 0) {
+                return e;
+            }
+        }
+    }
+    assert (0);
+    return 0;
+}
+
+function com_vs_com()
+{
+    let b = 0;
+    let red = true;
+    for (let turn = 0; turn < E; turn++, red = !red) {
+        let e = select_edge_com (b, red, turn);
+        output(`${turn}:${red? "RED " : "BLUE"},${edge2node_i[e]},${edge2node_i[e]}`);
+        let edges = get_board_edges(b, red);
+        if (will_make_triangle (edges, e)) {
+            output(`${red? "RED" : "BLUE"} LOSE`);
+            return !red;    // winner
+        }
+        b = add_edge_to_board(b, e, red);
+    }
+    output(`${red? "RED" : "BLUE"} LOSE`);
+    return !red;
+}
+
+function main_routine()
+{
+    output (`initializing...`);
+    init_node_table();
+    init_compress_table();
+    let red = true;
+    let red_will_win = search_win (0, red, 0);
+    console.log(`${red_will_win},${search_count}`);
+    console.log((!red_will_win ? "RED" : "BLUE") + " WILL LOSE");
+    output (`done.`);
+
+    for (let iter = 0; iter < 100; iter++) {
+        output (``);
+        let winner = com_vs_com();
+        if (red_will_win) assert (winner == true);
+        else assert (winner == false);
+    }
+}
+function assert(flag)
+{
+    if (!flag) {
+        console.trace(flag);
+        throw flag;
+    }
+}
+let $output, $canvas;
+function output(message)
+{
+    $output.innerHTML += message + '<br>';
+}
+window.addEventListener('load', () => {
+    $canvas = document.getElementById('canvas');
+    $output = document.getElementById('output');
+    main_routine();
+})
+</script>
+
+</head>
+<body>
+<h1>グラフ</h1>
+<canvas id="canvas" width="300" height="300" style=""></canvas>
+<div id="output"></div>
+<form id="form">
+<input id="a" type='text'>
+<input id="b" type='text'>
+</form>
+</body>
+</html>
