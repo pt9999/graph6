@@ -3,24 +3,42 @@
 <head>
 <title>グラフ</title>
 <style type="text/css">
+body {
+    text-align: center;
+    background-color: #ffffee;
+    color: #800000;
+}
+#contents {
+    width: 500px;
+    margin: 0 auto;
+
+}
 #canvas {
+    background-color: #ffffff;
+    margin: 5px;
+    padding: 5px;
     border: 1px solid black;
 }
 #output {
-    width: 600px;
-    height: 400px;
+    background-color: #ffffff;
+    border: 1px solid #ccc;
     margin: 5px;
     padding: 5px;
-    border: 1px solid #ccc;
+    text-align: left;
+    /*  
     border-radius: 5px;
-    overflow:scroll;
-}
-#form {
-    border: 1px solid black;
+    */
 }
 </style>
-<script>
+</head>
+<body>
+<h1>グラフ</h1>
+<div id="contents">
+    <canvas id="canvas" width="480" height="320"></canvas>
+    <div id="output">aaa</div>
+</div>
 
+<script>
 const N = 6;    //  node count
 const E = 15;   //  edge count
 const EDGE_MASK = (1 << E) - 1;
@@ -121,7 +139,7 @@ function board_has_edge(board, edge)
     return (edgeset & (1 << edge)) != 0;
 }
 
-function will_make_triangle(edgeset, edge)
+function will_make_triangle(edgeset, edge, return_array)
 {
     let i = edge2node_i[edge];
     let j = edge2node_j[edge];
@@ -134,7 +152,10 @@ function will_make_triangle(edgeset, edge)
             let e2 = node2edge[k*N+j];
             if ((edgeset & (1 << e1)) != 0 &&
                 (edgeset & (1 << e2)) != 0) {
-                    return true;
+                if (return_array) {
+                    return [edge, e1, e2];
+                }
+                return true;
             }
         }
     }
@@ -196,6 +217,7 @@ function select_edge_com(b, red, turn)
     let my_edges = get_board_edges(b, red);
     let win_edges = 0;
     let lose_edges = 0;
+    let losing_edges = 0;
     for (let e = 0; e < E; e++)
     {
         if (board_has_edge (b, e)) {
@@ -207,7 +229,7 @@ function select_edge_com(b, red, turn)
         }
         let b1 = add_edge_to_board(b, e, red);
         if (search_win(b1, !red, turn)) {
-            lose_edges |= (1 << e);
+            losing_edges |= (1 << e);
             continue;
         } else {
             win_edges |= (1 << e);
@@ -217,9 +239,10 @@ function select_edge_com(b, red, turn)
 
     let win_count = popcount(win_edges);
     let lose_count = popcount(lose_edges);
+    let losing_count = popcount(losing_edges);
 
-    let selectable_count = (win_count > 0) ? win_count : lose_count;
-    let selectable_edges = (win_count > 0) ? win_edges : lose_edges;
+    let selectable_count = (win_count > 0) ? win_count : (losing_count > 0) ? losing_count : lose_count;
+    let selectable_edges = (win_count > 0) ? win_edges : (losing_count > 0) ? losing_edges : lose_edges;
 
     let selection = Math.floor(Math.random() * selectable_count);
     for (let e = 0; e < E; e++)
@@ -240,7 +263,7 @@ function com_vs_com()
     let red = true;
     for (let turn = 0; turn < E; turn++, red = !red) {
         let e = select_edge_com (b, red, turn);
-        output(`${turn}:${red? "RED " : "BLUE"},${edge2node_i[e]},${edge2node_i[e]}`);
+        output(`${turn}:${red? "RED " : "BLUE"},${edge2node_i[e]},${edge2node_j[e]}`);
         let edges = get_board_edges(b, red);
         if (will_make_triangle (edges, e)) {
             output(`${red? "RED" : "BLUE"} LOSE`);
@@ -252,16 +275,21 @@ function com_vs_com()
     return !red;
 }
 
-function main_routine()
+function init_win_table()
 {
     output (`initializing...`);
-    init_node_table();
-    init_compress_table();
     let red = true;
     let red_will_win = search_win (0, red, 0);
     console.log(`${red_will_win},${search_count}`);
     console.log((!red_will_win ? "RED" : "BLUE") + " WILL LOSE");
     output (`done.`);
+}
+
+function cui_main_routine()
+{
+    init_node_table();
+    init_compress_table();
+    init_win_table();
 
     for (let iter = 0; iter < 100; iter++) {
         output (``);
@@ -270,6 +298,121 @@ function main_routine()
         else assert (winner == false);
     }
 }
+//-----------------------------------------------
+
+class Game {
+    constructor(canvas) {
+        this.canvas = canvas;
+        this.init_points();
+        this.init_game();
+    }
+
+    init_points() {
+        this.points = [];
+        const R = this.canvas.height * 0.4;
+        for (let i = 0; i < N; i++) {
+            let th = Math.PI * 2 * i / N;
+            const x = this.canvas.width / 2 + R * Math.cos(th);
+            const y = this.canvas.height / 2 + R * Math.sin(th);
+            this.points.push({x, y});
+        }
+    }
+
+    init_game() {
+        this.board = 0;
+        this.player = true;
+        this.turn = 0;
+        this.triangle = [];
+        this.winner = null;
+    }
+
+    draw() {
+        let g = this.canvas.getContext('2d');
+        g.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+        let red_edges = get_board_edges (this.board, true);
+        let blue_edges = get_board_edges (this.board, false);
+        for (let edge = 0; edge < E; edge++) {
+            if ((red_edges & (1 << edge)) != 0) {
+                g.strokeStyle = 'rgb(255,0,0)';
+            } else if ((blue_edges & (1 << edge)) != 0) {
+                g.strokeStyle = 'rgb(0,0,255)';
+            } else {
+                continue;
+            }
+            if (this.triangle.indexOf(edge) != -1) {
+                g.lineWidth = 3;
+            } else {
+                g.lineWidth = 1;
+            }
+            let i = edge2node_i[edge];
+            let j = edge2node_j[edge];
+            g.beginPath();
+            g.moveTo(this.points[i].x, this.points[i].y);
+            g.lineTo(this.points[j].x, this.points[j].y);
+            g.stroke();
+        }
+
+        g.strokeStyle = 'rgb(0,0,0)';
+        g.lineWidth = 1;
+        for (let i = 0; i < N; i++) {
+            g.beginPath();
+            g.arc(this.points[i].x, this.points[i].y, 10, 0, 2 * Math.PI);
+            g.stroke();
+        }
+    }
+
+    test() {
+        init_node_table();
+        this.board = (0x1f0 << 15) | 0x00f;
+        this.triangle = [ 1, 2, 3 ];
+        this.draw();
+    }
+    start_game() {
+        clear_output();
+        this.init_game();
+        setTimeout(() => this.do_turn(), 200);
+    }
+    do_turn() {
+        if (this.turn >= E) {
+            this.winner = (!this.player) ? 'RED' : 'BLUE';
+            output(`${red? "RED" : "BLUE"} LOSE`);
+            setTimeout (() => this.end_game(), 200);
+            return;
+        }
+        let edge = select_edge_com (this.board, this.player, this.turn);
+        output(`${this.turn}:${this.player? "RED " : "BLUE"},${edge2node_i[edge]},${edge2node_j[edge]}`);
+        let edges = get_board_edges(this.board, this.player);
+        let triangle = will_make_triangle (edges, edge, true);
+        this.board = add_edge_to_board(this.board, edge, this.player);
+        if (triangle !== false) {
+            this.triangle = triangle;
+            this.draw();
+            this.winner = (!this.player) ? 'RED' : 'BLUE';
+            output(`${this.player? "RED" : "BLUE"} LOSE`);
+            setTimeout (() => this.end_game(), 200);
+            return;
+        }
+        this.draw();
+        this.player = !this.player;
+        this.turn++;
+        setTimeout (() => this.do_turn(), 200);
+    }
+    end_game() {
+        setTimeout (() => this.start_game(), 3000);
+    }
+}
+
+function gui_main_routine(canvas)
+{
+    init_node_table();
+    init_compress_table();
+    init_win_table();
+    let game = new Game(canvas);
+    game.start_game();
+}
+
+//-----------------------------------------------
 function assert(flag)
 {
     if (!flag) {
@@ -278,25 +421,22 @@ function assert(flag)
     }
 }
 let $output, $canvas;
+function clear_output()
+{
+    $output.innerHTML = '';
+}
 function output(message)
 {
+    console.log(message);
     $output.innerHTML += message + '<br>';
 }
 window.addEventListener('load', () => {
     $canvas = document.getElementById('canvas');
     $output = document.getElementById('output');
-    main_routine();
+    //cui_main_routine();
+    gui_main_routine ($canvas);
 })
 </script>
-
-</head>
-<body>
-<h1>グラフ</h1>
-<canvas id="canvas" width="300" height="300" style=""></canvas>
-<div id="output"></div>
-<form id="form">
-<input id="a" type='text'>
-<input id="b" type='text'>
-</form>
+    
 </body>
 </html>
