@@ -19,7 +19,7 @@ body {
     padding: 5px;
     border: 1px solid black;
 }
-#output {
+#messages {
     background-color: #ffffff;
     border: 1px solid #ccc;
     margin: 5px;
@@ -35,7 +35,15 @@ body {
 <h1>グラフ</h1>
 <div id="contents">
     <canvas id="canvas" width="480" height="320"></canvas>
-    <div id="output">aaa</div>
+    <form>
+        <div>
+            <input type="button" id="prev_button" value="&lt;">
+            <input type="button" id="next_button" value="&gt;">
+            <input type="button" id="run_button" value="連続実行">
+            <input type="button" id="stop_button" value="停止">
+        </div>
+        <textarea id="messages" rows="17" cols="50"></textarea>
+    </form>
 </div>
 
 <script>
@@ -60,7 +68,7 @@ function init_node_table()
             node2edge[j*N+i] = edge;
             edge2node_i[edge] = i;
             edge2node_j[edge] = j;
-            //output (`${i},${j},${edge}<br>`);
+            //console.log (`${i},${j},${edge}<br>`);
         }
     }
 }
@@ -263,26 +271,26 @@ function com_vs_com()
     let red = true;
     for (let turn = 0; turn < E; turn++, red = !red) {
         let e = select_edge_com (b, red, turn);
-        output(`${turn}:${red? "RED " : "BLUE"},${edge2node_i[e]},${edge2node_j[e]}`);
+        console.log(`${turn}:${red? "RED " : "BLUE"},${edge2node_i[e]},${edge2node_j[e]}`);
         let edges = get_board_edges(b, red);
         if (will_make_triangle (edges, e)) {
-            output(`${red? "RED" : "BLUE"} LOSE`);
+            console.log(`${red? "RED" : "BLUE"} LOSE`);
             return !red;    // winner
         }
         b = add_edge_to_board(b, e, red);
     }
-    output(`${red? "RED" : "BLUE"} LOSE`);
+    console.log(`${red? "RED" : "BLUE"} LOSE`);
     return !red;
 }
 
 function init_win_table()
 {
-    output (`initializing...`);
+    console.log (`initializing...`);
     let red = true;
     let red_will_win = search_win (0, red, 0);
     console.log(`${red_will_win},${search_count}`);
     console.log((!red_will_win ? "RED" : "BLUE") + " WILL LOSE");
-    output (`done.`);
+    console.log (`done.`);
 }
 
 function cui_main_routine()
@@ -292,46 +300,37 @@ function cui_main_routine()
     init_win_table();
 
     for (let iter = 0; iter < 100; iter++) {
-        output (``);
+        console.log (``);
         let winner = com_vs_com();
         if (red_will_win) assert (winner == true);
         else assert (winner == false);
     }
 }
+
 //-----------------------------------------------
 
-class Game {
-    constructor(canvas) {
-        this.canvas = canvas;
+class BoardView {
+    constructor(game) {
+        this.game = game;
+        this.$canvas = document.getElementById('canvas');
         this.init_points();
-        this.init_game();
     }
-
     init_points() {
         this.points = [];
-        const R = this.canvas.height * 0.4;
+        const R = this.$canvas.height * 0.4;
         for (let i = 0; i < N; i++) {
             let th = Math.PI * 2 * i / N;
-            const x = this.canvas.width / 2 + R * Math.cos(th);
-            const y = this.canvas.height / 2 + R * Math.sin(th);
+            const x = this.$canvas.width / 2 + R * Math.cos(th);
+            const y = this.$canvas.height / 2 + R * Math.sin(th);
             this.points.push({x, y});
         }
     }
-
-    init_game() {
-        this.board = 0;
-        this.player = true;
-        this.turn = 0;
-        this.triangle = [];
-        this.winner = null;
-    }
-
     draw() {
-        let g = this.canvas.getContext('2d');
-        g.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        let g = this.$canvas.getContext('2d');
+        g.clearRect(0, 0, this.$canvas.width, this.$canvas.height);
 
-        let red_edges = get_board_edges (this.board, true);
-        let blue_edges = get_board_edges (this.board, false);
+        let red_edges = get_board_edges (this.game.board, true);
+        let blue_edges = get_board_edges (this.game.board, false);
         for (let edge = 0; edge < E; edge++) {
             if ((red_edges & (1 << edge)) != 0) {
                 g.strokeStyle = 'rgb(255,0,0)';
@@ -340,7 +339,7 @@ class Game {
             } else {
                 continue;
             }
-            if (this.triangle.indexOf(edge) != -1) {
+            if (this.game.triangle.indexOf(edge) != -1) {
                 g.lineWidth = 3;
             } else {
                 g.lineWidth = 1;
@@ -361,56 +360,168 @@ class Game {
             g.stroke();
         }
     }
+}
 
-    test() {
-        init_node_table();
-        this.board = (0x1f0 << 15) | 0x00f;
-        this.triangle = [ 1, 2, 3 ];
-        this.draw();
+//-----------------------------------------------
+
+class Toolbar {
+    constructor(game) {
+        this.game = game;
+        this.$prev_button = document.getElementById('prev_button');
+        this.$next_button = document.getElementById('next_button');
+        this.$stop_button = document.getElementById('stop_button');
+        this.$run_button = document.getElementById('run_button');
+        this.$prev_button.onclick = () => game.on_prev_button_click();
+        this.$next_button.onclick = () => game.on_next_button_click();
+        this.$stop_button.onclick = () => game.on_stop_button_click();
+        this.$run_button.onclick = () => game.on_run_button_click();
+        this.update();
     }
-    start_game() {
-        clear_output();
+    update() {
+        this.$run_button.disabled = (this.game.mode == MODE_AUTO);
+        this.$stop_button.disabled = (this.game.mode == MODE_MANUAL);
+    }
+}
+
+//-----------------------------------------------
+
+class Messages {
+    constructor(game) {
+        this.game = game;
+        this.lines = [];
+        this.$messages = document.getElementById('messages');
+    }
+    update()
+    {
+        this.$messages.value = this.lines.join('\n');
+    }
+    clear()
+    {
+        this.lines = [];
+        this.update();
+    }
+    push(line)
+    {
+        this.lines.push(line);
+        this.update();
+    }
+    pop()
+    {
+        if (this.lines.length > 0) {
+            this.lines = this.lines.slice(0, this.lines.length - 1);
+            this.update();
+        }
+    }
+}
+
+//-----------------------------------------------
+
+const MODE_MANUAL = 0;
+const MODE_AUTO = 1;
+
+const STATE_START = 0;
+const STATE_RUN = 1;
+const STATE_END = 2;
+
+class Game {
+    constructor() {
+        this.mode = MODE_AUTO;
+        this.state = STATE_START;
+        this.init_tables();
         this.init_game();
-        setTimeout(() => this.do_turn(), 200);
+        this.toolbar = new Toolbar (this);
+        this.view = new BoardView (this);
+        this.messages = new Messages (this);
+    }
+
+    init_tables() {
+        init_node_table();
+        init_compress_table();
+        init_win_table();
+    }
+
+
+    init_game() {
+        this.board = 0;
+        this.player = true;
+        this.turn = 0;
+        this.triangle = [];
+        this.history = [];
+        this.winner = null;
+    }
+
+    step() {
+        console.log('step')
+        if (this.state == STATE_START) {
+            this.start_game();
+            this.setTimeoutWhenAuto(() => { this.state = STATE_RUN; this.step(); }, 200); 
+        } else if (this.state == STATE_RUN) {
+            this.do_turn();                
+            this.setTimeoutWhenAuto(() => { this.step(); }, 200); 
+        } else if (this.state == STATE_END) {
+            this.end_game();
+            this.setTimeoutWhenAuto(() => { this.state = STATE_START; this.step(); }, 200); 
+        }
+    }
+
+    setTimeoutWhenAuto (func, timeout) {
+        console.log('setTimeoutWhenAuto')
+        if (this.mode == MODE_AUTO) { 
+            console.log('setTimeout')
+            setTimeout(func, timeout); 
+        }
+    }
+
+    start_game() {
+        console.log('start_game')
+        this.messages.clear();
+        this.init_game();
+        this.view.draw();
     }
     do_turn() {
         if (this.turn >= E) {
             this.winner = (!this.player) ? 'RED' : 'BLUE';
-            output(`${red? "RED" : "BLUE"} LOSE`);
-            setTimeout (() => this.end_game(), 200);
+            this.messages.push(`${red? "RED" : "BLUE"} LOSE`);
+            this.state = STATE_END;
             return;
         }
         let edge = select_edge_com (this.board, this.player, this.turn);
-        output(`${this.turn}:${this.player? "RED " : "BLUE"},${edge2node_i[edge]},${edge2node_j[edge]}`);
+        let node_i = edge2node_i[edge];
+        let node_j = edge2node_j[edge];
+        this.messages.push(`${this.turn + 1}:${this.player? "RED " : "BLUE"},${node_i + 1},${node_j + 1}`);
         let edges = get_board_edges(this.board, this.player);
         let triangle = will_make_triangle (edges, edge, true);
         this.board = add_edge_to_board(this.board, edge, this.player);
         if (triangle !== false) {
             this.triangle = triangle;
-            this.draw();
+            this.view.draw();
             this.winner = (!this.player) ? 'RED' : 'BLUE';
-            output(`${this.player? "RED" : "BLUE"} LOSE`);
-            setTimeout (() => this.end_game(), 200);
+            this.messages.push(`${this.player? "RED" : "BLUE"} LOSE`);
+            this.state = STATE_END;
             return;
         }
-        this.draw();
+        this.view.draw();
         this.player = !this.player;
         this.turn++;
-        setTimeout (() => this.do_turn(), 200);
     }
     end_game() {
-        setTimeout (() => this.start_game(), 3000);
+    }
+
+    on_run_button_click() {
+        this.mode = MODE_AUTO;
+        this.toolbar.update();
+        this.setTimeoutWhenAuto(() => { this.step(); }, 200); 
+    }
+    on_stop_button_click() {
+        this.mode = MODE_MANUAL;
+        this.toolbar.update();
+    }
+    on_prev_button_click() {
+    }
+    on_next_button_click() {
     }
 }
 
-function gui_main_routine(canvas)
-{
-    init_node_table();
-    init_compress_table();
-    init_win_table();
-    let game = new Game(canvas);
-    game.start_game();
-}
 
 //-----------------------------------------------
 function assert(flag)
@@ -420,21 +531,11 @@ function assert(flag)
         throw flag;
     }
 }
-let $output, $canvas;
-function clear_output()
-{
-    $output.innerHTML = '';
-}
-function output(message)
-{
-    console.log(message);
-    $output.innerHTML += message + '<br>';
-}
+
+let game;
 window.addEventListener('load', () => {
-    $canvas = document.getElementById('canvas');
-    $output = document.getElementById('output');
-    //cui_main_routine();
-    gui_main_routine ($canvas);
+    game = new Game();
+    game.step();
 })
 </script>
     
