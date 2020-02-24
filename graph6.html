@@ -16,7 +16,7 @@ body {
 #canvas {
     background-color: #ffffff;
     margin: 5px;
-    padding: 5px;
+    padding: 0px;
     border: 1px solid black;
 }
 #messages {
@@ -313,7 +313,10 @@ class BoardView {
     constructor(game) {
         this.game = game;
         this.$canvas = document.getElementById('canvas');
+        this.$canvas.onmousemove = (event) => this.on_mouse_move (event);
+        this.$canvas.onclick = (event) => this.on_click (event);
         this.init_points();
+        this.edge_selection = null;
     }
     init_points() {
         this.points = [];
@@ -328,7 +331,11 @@ class BoardView {
     draw() {
         let g = this.$canvas.getContext('2d');
         g.clearRect(0, 0, this.$canvas.width, this.$canvas.height);
-
+        this.draw_edges();
+        this.draw_points();
+    }
+    draw_edges() {
+        let g = this.$canvas.getContext('2d');
         let red_edges = get_board_edges (this.game.board, true);
         let blue_edges = get_board_edges (this.game.board, false);
         for (let edge = 0; edge < E; edge++) {
@@ -351,14 +358,108 @@ class BoardView {
             g.lineTo(this.points[j].x, this.points[j].y);
             g.stroke();
         }
-
-        g.strokeStyle = 'rgb(0,0,0)';
-        g.lineWidth = 1;
+    }
+    draw_points() {
+        let g = this.$canvas.getContext('2d');
+        let player = this.game.player;
         for (let i = 0; i < N; i++) {
+            g.strokeStyle = '#000000';
+            g.fillStyle = '#ffffff';
+            g.lineWidth = 1;
+            if (this.edge_selection) {
+                if (this.edge_selection.is_hover(i)) {
+                    g.strokeStyle = (player? '#ff0000':'#0000ff');
+                    g.lineWidth = 2;
+                }
+                if (this.edge_selection.is_selected(i)) {
+                    g.fillStyle = (player? '#ffcccc':'#ccccff');
+                }
+            }
             g.beginPath();
             g.arc(this.points[i].x, this.points[i].y, 10, 0, 2 * Math.PI);
             g.stroke();
+            g.fill();
         }
+    }
+    start_edge_selection(callback) {
+        this.edge_selection = new EdgeSelection (this, callback);
+    }
+    stop_edge_selection() {
+        this.edge_selection = null;
+    }
+    on_mouse_move(event) {
+        if (this.edge_selection) {
+            this.edge_selection.on_mouse_move(event);
+        }
+    }
+    on_click(event) {
+        if (this.edge_selection) {
+            this.edge_selection.on_click(event);
+        }
+    }
+}
+
+//-----------------------------------------------
+
+class EdgeSelection {
+    constructor(view, callback) {
+        this.view = view;
+        this.node_hover = -1;
+        this.node_selected = [];
+        this.callback = callback;
+    }
+    is_hover(node) {
+        return this.node_hover == node;
+    }
+    is_selected(node) {
+        return this.node_selected.indexOf (node) != -1;
+    }
+    find_node_near_mouse(event) {
+        let rect = this.view.$canvas.getBoundingClientRect();
+        let x = event.clientX - rect.left;
+        let y = event.clientY - rect.top;
+        let node = -1;
+        for (let i = 0; i < N; i++) {
+            let distance = Math.hypot (this.view.points[i].x - x, this.view.points[i].y - y);
+            if (distance < 15) {
+                node = i;
+                break;
+            }
+        }
+        return node;
+    }
+    on_mouse_move(event) {
+        let node = this.find_node_near_mouse(event);
+        if (this.node_hover != node) {
+            this.node_hover = node;
+            this.view.draw_points();
+        }
+    }
+    on_click(event) {
+        let node = this.find_node_near_mouse(event);
+        if (node != -1) {
+            if (this.node_selected.indexOf(node) == -1)
+            {
+                this.node_selected.push(node);
+                this.node_selected.sort();
+                this.view.draw();
+                if (this.node_selected.length == 2) {
+                    this.fire_edge_selected();
+                }
+            } else {
+                this.node_selected = this.node_selected.filter(n => n != node);
+                this.view.draw();
+            }
+        }
+    }
+    fire_edge_selected() {
+        let node_i = this.node_selected[0];
+        let node_j = this.node_selected[1];
+        if (node_i == node_j) return;
+        let edge = node2edge[node_i * N + node_j];
+        this.node_hover = -1;
+        this.node_selected = [];
+        this.callback(edge);
     }
 }
 
@@ -445,6 +546,7 @@ class Game {
         this.board = 0;
         this.player = true;
         this.turn = 0;
+        this.selected_edge_human = -1;
         this.triangle = [];
         this.history = [];
         this.winner = null;
@@ -465,18 +567,24 @@ class Game {
     }
 
     setTimeoutWhenAuto (func, timeout) {
-        console.log('setTimeoutWhenAuto')
         if (this.mode == MODE_AUTO) { 
-            console.log('setTimeout')
             setTimeout(func, timeout); 
         }
     }
 
     start_game() {
-        console.log('start_game')
         this.messages.clear();
         this.init_game();
         this.view.draw();
+    }
+    select_edge() {
+        let edge = this.selected_edge_human;
+        this.selected_edge_human = -1;
+        if (edge != -1 && ! board_has_edge(this.board, edge)) {
+            return edge;
+        }
+        edge = select_edge_com (this.board, this.player, this.turn);
+        return edge;
     }
     do_turn() {
         if (this.turn >= E) {
@@ -485,7 +593,7 @@ class Game {
             this.state = STATE_END;
             return;
         }
-        let edge = select_edge_com (this.board, this.player, this.turn);
+        let edge = this.select_edge();
         let node_i = edge2node_i[edge];
         let node_j = edge2node_j[edge];
         this.messages.push(`${this.turn + 1}:${this.player? "RED " : "BLUE"},${node_i + 1},${node_j + 1}`);
@@ -510,15 +618,24 @@ class Game {
     on_run_button_click() {
         this.mode = MODE_AUTO;
         this.toolbar.update();
+        this.view.stop_edge_selection();
         this.setTimeoutWhenAuto(() => { this.step(); }, 200); 
     }
     on_stop_button_click() {
         this.mode = MODE_MANUAL;
         this.toolbar.update();
+        this.view.start_edge_selection(this.on_edge_selected.bind(this));
     }
     on_prev_button_click() {
     }
     on_next_button_click() {
+    }
+    on_edge_selected(edge) {
+        this.selected_edge_human = edge;
+        this.step();
+        if (this.mode == MODE_MANUAL) {
+            this.view.start_edge_selection(this.on_edge_selected.bind(this));
+        }
     }
 }
 
