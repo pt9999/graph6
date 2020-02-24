@@ -37,11 +37,12 @@ body {
     <canvas id="canvas" width="480" height="320"></canvas>
     <form>
         <div>
-            <input type="button" id="prev_button" value="&lt;">
-            <input type="button" id="next_button" value="&gt;">
-            <input type="button" id="run_button" value="連続実行">
-            <input type="button" id="stop_button" value="停止">
+            <input type="button" id="auto_button" value="自動実行">
+            <input type="button" id="prev_button" value="一手戻す">
+            <input type="button" id="next_button" value="一手進む">
+            <input type="button" id="manual_button" value="停止">
         </div>
+        <div id="help"></div>
         <textarea id="messages" rows="17" cols="50"></textarea>
     </form>
 </div>
@@ -369,7 +370,7 @@ class BoardView {
             if (this.edge_selection) {
                 if (this.edge_selection.is_hover(i)) {
                     g.strokeStyle = (player? '#ff0000':'#0000ff');
-                    g.lineWidth = 2;
+                    g.lineWidth = 3;
                 }
                 if (this.edge_selection.is_selected(i)) {
                     g.fillStyle = (player? '#ffcccc':'#ccccff');
@@ -382,7 +383,9 @@ class BoardView {
         }
     }
     start_edge_selection(callback) {
-        this.edge_selection = new EdgeSelection (this, callback);
+        if (this.edge_selection == null) {
+            this.edge_selection = new EdgeSelection (this, callback);
+        }
     }
     stop_edge_selection() {
         this.edge_selection = null;
@@ -430,9 +433,9 @@ class EdgeSelection {
     }
     on_mouse_move(event) {
         let node = this.find_node_near_mouse(event);
-        if (this.node_hover != node) {
+        if (true) {// (this.node_hover != node) {
             this.node_hover = node;
-            this.view.draw_points();
+            this.view.draw();
         }
     }
     on_click(event) {
@@ -457,9 +460,9 @@ class EdgeSelection {
         let node_j = this.node_selected[1];
         if (node_i == node_j) return;
         let edge = node2edge[node_i * N + node_j];
-        this.node_hover = -1;
         this.node_selected = [];
         this.callback(edge);
+        this.view.draw();
     }
 }
 
@@ -470,17 +473,35 @@ class Toolbar {
         this.game = game;
         this.$prev_button = document.getElementById('prev_button');
         this.$next_button = document.getElementById('next_button');
-        this.$stop_button = document.getElementById('stop_button');
-        this.$run_button = document.getElementById('run_button');
+        this.$manual_button = document.getElementById('manual_button');
+        this.$auto_button = document.getElementById('auto_button');
+        this.$help = document.getElementById('help');
         this.$prev_button.onclick = () => game.on_prev_button_click();
         this.$next_button.onclick = () => game.on_next_button_click();
-        this.$stop_button.onclick = () => game.on_stop_button_click();
-        this.$run_button.onclick = () => game.on_run_button_click();
+        this.$manual_button.onclick = () => game.on_manual_button_click();
+        this.$auto_button.onclick = () => game.on_auto_button_click();
         this.update();
     }
     update() {
-        this.$run_button.disabled = (this.game.mode == MODE_AUTO);
-        this.$stop_button.disabled = (this.game.mode == MODE_MANUAL);
+        if (this.game.mode == MODE_INITIALIZING) {
+            this.$help.innerText = '初期化中...しばらくお待ちください';
+            this.$auto_button.disabled = false;
+            this.$manual_button.disabled = false;
+            this.$prev_button.disabled = false;
+            this.$next_button.disabled = false;
+        } else if (this.game.mode == MODE_AUTO) {
+            this.$help.innerText = '自動実行中';
+            this.$auto_button.disabled = true;
+            this.$manual_button.disabled = false;
+            this.$prev_button.disabled = true;
+            this.$next_button.disabled = true;
+        } else {
+            this.$help.innerText = '停止中：頂点をマウスで選択できます';
+            this.$auto_button.disabled = false;
+            this.$manual_button.disabled = true;
+            this.$prev_button.disabled = (this.game.history.length == 0);
+            this.$next_button.disabled = (this.game.state == STATE_END);
+        }
     }
 }
 
@@ -517,8 +538,9 @@ class Messages {
 
 //-----------------------------------------------
 
-const MODE_MANUAL = 0;
-const MODE_AUTO = 1;
+const MODE_INITIALIZING = 0;
+const MODE_MANUAL = 1;
+const MODE_AUTO = 2;
 
 const STATE_START = 0;
 const STATE_RUN = 1;
@@ -526,13 +548,21 @@ const STATE_END = 2;
 
 class Game {
     constructor() {
-        this.mode = MODE_AUTO;
+        this.mode = MODE_INITIALIZING;
         this.state = STATE_START;
-        this.init_tables();
-        this.init_game();
-        this.toolbar = new Toolbar (this);
         this.view = new BoardView (this);
         this.messages = new Messages (this);
+        this.toolbar = new Toolbar (this);
+        this.toolbar.update();
+
+        setTimeout(() => {
+            this.init_game();
+            this.init_tables();
+
+            this.mode = MODE_AUTO;
+            this.toolbar.update();
+            this.step();
+        }, 0);
     }
 
     init_tables() {
@@ -550,25 +580,35 @@ class Game {
         this.triangle = [];
         this.history = [];
         this.winner = null;
+        this.timer = -1;
     }
 
     step() {
         console.log('step')
         if (this.state == STATE_START) {
             this.start_game();
-            this.setTimeoutWhenAuto(() => { this.state = STATE_RUN; this.step(); }, 200); 
+            this.set_auto_timer(STATE_RUN, 200); 
         } else if (this.state == STATE_RUN) {
             this.do_turn();                
-            this.setTimeoutWhenAuto(() => { this.step(); }, 200); 
+            this.set_auto_timer(this.state, 200); 
         } else if (this.state == STATE_END) {
             this.end_game();
-            this.setTimeoutWhenAuto(() => { this.state = STATE_START; this.step(); }, 200); 
+            this.set_auto_timer(STATE_START, 2000); 
         }
     }
 
-    setTimeoutWhenAuto (func, timeout) {
+    set_auto_timer (next_state, timeout) {
         if (this.mode == MODE_AUTO) { 
-            setTimeout(func, timeout); 
+            this.timer = setTimeout(() => { 
+                this.state = next_state; 
+                this.step();
+            }, timeout); 
+        }
+    }
+    cancel_timer() {
+        if (this.timer != -1) {
+            clearTimeout(this.timer);
+            this.timer = -1;
         }
     }
 
@@ -600,13 +640,12 @@ class Game {
         let edges = get_board_edges(this.board, this.player);
         let triangle = will_make_triangle (edges, edge, true);
         this.board = add_edge_to_board(this.board, edge, this.player);
+        this.history.push(this.board);
         if (triangle !== false) {
             this.triangle = triangle;
-            this.view.draw();
             this.winner = (!this.player) ? 'RED' : 'BLUE';
             this.messages.push(`${this.player? "RED" : "BLUE"} LOSE`);
             this.state = STATE_END;
-            return;
         }
         this.view.draw();
         this.player = !this.player;
@@ -615,27 +654,57 @@ class Game {
     end_game() {
     }
 
-    on_run_button_click() {
+    update_edge_selection() {
+        if (this.mode == MODE_MANUAL && (this.state == STATE_START || this.state == STATE_RUN)) {
+            this.view.start_edge_selection(this.on_edge_selected.bind(this));
+        } else {
+            this.view.stop_edge_selection();
+        }
+    }
+
+    on_auto_button_click() {
         this.mode = MODE_AUTO;
         this.toolbar.update();
-        this.view.stop_edge_selection();
-        this.setTimeoutWhenAuto(() => { this.step(); }, 200); 
+        this.update_edge_selection();
+        this.set_auto_timer(this.state, 200); 
     }
-    on_stop_button_click() {
+    on_manual_button_click() {
         this.mode = MODE_MANUAL;
+        this.cancel_timer();
         this.toolbar.update();
-        this.view.start_edge_selection(this.on_edge_selected.bind(this));
+        this.update_edge_selection();
     }
     on_prev_button_click() {
+        if (this.mode != MODE_MANUAL) return;
+        if (this.state != STATE_RUN && this.state != STATE_END) return;
+        if (this.history.length == 0) return;
+
+        if (this.state == STATE_END) {
+            this.state = STATE_RUN;
+            this.winner = null;
+            this.triangle = [];
+            this.messages.pop();
+        }
+        this.messages.pop();
+        this.history.pop();
+        this.board = (this.history.length) == 0 ? 0 : this.history[this.history.length - 1];
+        this.player = !this.player;
+        this.turn--;
+        this.view.draw();
+        this.toolbar.update();
     }
     on_next_button_click() {
+        if (this.mode != MODE_MANUAL) return;
+        if (this.state != STATE_RUN) return;
+        this.selected_edge_human = -1;
+        this.step();
+        this.toolbar.update();
     }
     on_edge_selected(edge) {
         this.selected_edge_human = edge;
         this.step();
-        if (this.mode == MODE_MANUAL) {
-            this.view.start_edge_selection(this.on_edge_selected.bind(this));
-        }
+        this.toolbar.update();
+        this.view.update_edge_selection();
     }
 }
 
@@ -652,7 +721,6 @@ function assert(flag)
 let game;
 window.addEventListener('load', () => {
     game = new Game();
-    game.step();
 })
 </script>
     
